@@ -1,0 +1,1 @@
+cmd_/home/vagrant/sandbox/kernel/linux4Drivers/scull/scull.o := ld -m elf_x86_64   -r -o /home/vagrant/sandbox/kernel/linux4Drivers/scull/scull.o /home/vagrant/sandbox/kernel/linux4Drivers/scull/main.o /home/vagrant/sandbox/kernel/linux4Drivers/scull/pipe.o /home/vagrant/sandbox/kernel/linux4Drivers/scull/access.o 
