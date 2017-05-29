@@ -1,1 +1,0 @@
-cmd_/home/vagrant/sandbox/kernel/linux4Drivers/scull/scull.ko := ld -r -m elf_x86_64 -T ./scripts/module-common.lds --build-id  -o /home/vagrant/sandbox/kernel/linux4Drivers/scull/scull.ko /home/vagrant/sandbox/kernel/linux4Drivers/scull/scull.o /home/vagrant/sandbox/kernel/linux4Drivers/scull/scull.mod.o ;  true

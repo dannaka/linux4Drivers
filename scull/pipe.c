@@ -24,6 +24,7 @@
 #include <linux/errno.h>	/* error codes */
 #include <linux/types.h>	/* size_t */
 #include <linux/fcntl.h>
+#include <linux/seq_file.h>
 #include <linux/poll.h>
 #include <linux/cdev.h>
 #include <asm/uaccess.h>
@@ -261,50 +262,62 @@ static int scull_p_fasync(int fd, struct file *filp, int mode)
 
 /* FIXME this should use seq_file */
 #ifdef SCULL_DEBUG
-static void scullp_proc_offset(char *buf, char **start, off_t *offset, int *len)
+
+static void *scull_p_seq_start(struct seq_file *s, loff_t *pos)
 {
-	if (*offset == 0)
-		return;
-	if (*offset >= *len) {	/* Not there yet */
-		*offset -= *len;
-		*len = 0;
-	}
-	else {			/* We're into the interesting stuff now */
-		*start = buf + *offset;
-		*offset = 0;
-	}
+	if (*pos >= scull_p_nr_devs)
+		return NULL;   /* No more to read */
+	return scull_p_devices + *pos;
 }
 
-
-static int scull_read_p_mem(char *buf, char **start, off_t offset, int count,
-		int *eof, void *data)
+static void *scull_p_seq_next(struct seq_file *s, void *v, loff_t *pos)
 {
-	int i, len;
-	struct scull_pipe *p;
-
-#define LIMIT (PAGE_SIZE-200)	/* don't print any more after this size */
-	*start = buf;
-	len = sprintf(buf, "Default buffersize is %i\n", scull_p_buffer);
-	for(i = 0; i<scull_p_nr_devs && len <= LIMIT; i++) {
-		p = &scull_p_devices[i];
-		if (down_interruptible(&p->sem))
-			return -ERESTARTSYS;
-		len += sprintf(buf+len, "\nDevice %i: %p\n", i, p);
-/*		len += sprintf(buf+len, "   Queues: %p %p\n", p->inq, p->outq);*/
-		len += sprintf(buf+len, "   Buffer: %p to %p (%i bytes)\n", p->buffer, p->end, p->buffersize);
-		len += sprintf(buf+len, "   rp %p   wp %p\n", p->rp, p->wp);
-		len += sprintf(buf+len, "   readers %i   writers %i\n", p->nreaders, p->nwriters);
-		up(&p->sem);
-		scullp_proc_offset(buf, start, &offset, &len);
-	}
-	*eof = (len <= LIMIT);
-	return len;
+	(*pos)++;
+	if (*pos >= scull_p_nr_devs)
+		return NULL;
+	return scull_p_devices + *pos;
 }
 
+static void scull_p_seq_stop(struct seq_file *s, void *v)
+{
+	/* Actually, there's nothing to do here */
+}
 
+static int scull_p_seq_show(struct seq_file *s, void *v)
+{
+	struct scull_pipe *p = (struct scull_pipe *) v;
+
+	if (down_interruptible(&p->sem))
+		return -ERESTARTSYS;
+    seq_printf(s, "Device %li: %p\n", (struct scull_pipe *)v - (struct scull_pipe *)scull_p_devices, v);
+    seq_printf(s, "Default buffersize is %i\n\n", scull_p_buffer);
+	up(&p->sem);
+	return 0;
+}
+
+/*
+ * The file operations for the pipe device's entry in /proc
+ * (some are overlayed with bare scull)
+ */
+static struct seq_operations scull_seq_ops = {
+	.start = scull_p_seq_start,
+	.next  = scull_p_seq_next,
+	.stop  = scull_p_seq_stop,
+	.show  = scull_p_seq_show
+};
+
+static int scull_p_proc_open(struct inode *inode, struct file *file){
+    return seq_open(file, &scull_seq_ops);
+}
+
+struct file_operations scull_pipe_proc_fops = {
+    .owner   = THIS_MODULE,
+    .open    = scull_p_proc_open,
+	.read    = seq_read,
+    .llseek  = seq_lseek,
+    .release = seq_release
+};
 #endif
-
-
 
 /*
  * The file operations for the pipe device
@@ -366,7 +379,7 @@ int scull_p_init(dev_t firstdev)
 		scull_p_setup_cdev(scull_p_devices + i, i);
 	}
 #ifdef SCULL_DEBUG
-	create_proc_read_entry("scullpipe", 0, NULL, scull_read_p_mem, NULL);
+	proc_create("scullpipe", 0, NULL, &scull_pipe_proc_fops);
 #endif
 	return scull_p_nr_devs;
 }

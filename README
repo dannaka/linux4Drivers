@@ -1,0 +1,10 @@
+Linux Device Drivers 3rd edition
+
+Example code in the book were written some years before.
+The book's code are based on Linux2.6, but now, Linux kernel are
+developed and go well in these years so latest version reaches 
+Linux4.12(now).
+
+Thus we can't build the examples on the latest kernel.
+
+This repository offers newer examples for Linux4.10. 

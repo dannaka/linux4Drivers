@@ -1,0 +1,7 @@
+kernel//home/vagrant/sandbox/kernel/linux4Drivers/misc-modules/hello.ko
+kernel//home/vagrant/sandbox/kernel/linux4Drivers/misc-modules/hellop.ko
+kernel//home/vagrant/sandbox/kernel/linux4Drivers/misc-modules/seq.ko
+kernel//home/vagrant/sandbox/kernel/linux4Drivers/misc-modules/complete.ko
+kernel//home/vagrant/sandbox/kernel/linux4Drivers/misc-modules/faulty.ko
+kernel//home/vagrant/sandbox/kernel/linux4Drivers/misc-modules/sleepy.ko
+kernel//home/vagrant/sandbox/kernel/linux4Drivers/misc-modules/jit.ko
