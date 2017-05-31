@@ -15,7 +15,6 @@
  * $Id: jit.c,v 1.16 2004/09/26 07:02:43 gregkh Exp $
  */
 
-#include <linux/kobject.h>
 #include <linux/string.h>
 #include <linux/proc_fs.h>
 #include <linux/fs.h>
@@ -40,10 +39,13 @@
  */
 
 int delay = HZ; /* the default delay, expressed in jiffies */
+int max_timer_nr = 4096;
+int p_cnt = 1;
 
 module_param(delay, int, 0);
+module_param(max_timer_nr, int, 0);
 
-MODULE_AUTHOR("Alessandro Rubini,Greg Kroah-Hartman <greg@kroah.com>");
+MODULE_AUTHOR("Dan Nakahara");
 MODULE_LICENSE("Dual BSD/GPL");
 
 /*
@@ -78,9 +80,6 @@ int currentime_show(struct seq_file *file, void *v)
 int jitbusy_show(struct seq_file *file, void *v)
 {
 	unsigned long j0, j1; /* jiffies */
-	wait_queue_head_t wait;
-
-	init_waitqueue_head (&wait);
 	j0 = jiffies;
 	j1 = j0 + delay;
 
@@ -95,9 +94,6 @@ int jitbusy_show(struct seq_file *file, void *v)
 int jitsched_show(struct seq_file *file, void *v)
 {
 	unsigned long j0, j1; /* jiffies */
-	wait_queue_head_t wait;
-
-	init_waitqueue_head (&wait);
 	j0 = jiffies;
 	j1 = j0 + delay;
 
@@ -130,9 +126,6 @@ int jitqueue_show(struct seq_file *file, void *v)
 int jitschedto_show(struct seq_file *file, void *v)
 {
 	unsigned long j0, j1; /* jiffies */
-	wait_queue_head_t wait;
-
-	init_waitqueue_head (&wait);
 	j0 = jiffies;
 	j1 = j0 + delay;
 
@@ -314,24 +307,83 @@ int jitasklethi_show(struct seq_file *file, void *v)
 	return 0;
 }
 
+static void *jit_proc_seq_start (struct seq_file *s, loff_t * pos)
+{
+    loff_t *spos;
+    if(p_cnt > max_timer_nr)
+        return NULL;
+
+    printk(KERN_ALERT "start: %i\n", p_cnt);
+    ++p_cnt;
+    spos = kmalloc (sizeof (loff_t), GFP_KERNEL);
+    if (!spos)
+        return NULL;
+    *spos = *pos;
+    return spos;
+}
+
+static void *jit_proc_seq_next (struct seq_file *s, void *v, loff_t * pos)
+{
+    loff_t *spos;
+    if(p_cnt >=max_timer_nr)
+        return NULL;
+    printk(KERN_ALERT "next: %i\n", p_cnt);
+    ++p_cnt;
+
+    spos = (loff_t *) v;
+    *pos = ++(*spos);
+    return spos;
+}
+
+static void jit_proc_seq_stop (struct seq_file *s, void *v)
+{
+    kfree (v);
+}
+#define BUILD_JIT_PROC_SEQ_OPS(type) \
+    static struct seq_operations type##_proc_seq_ops = {\
+        .start = jit_proc_seq_start,        \
+        .next = jit_proc_seq_next,      \
+        .stop = jit_proc_seq_stop,      \
+        .show = type##_show,    \
+    };
+
+BUILD_JIT_PROC_SEQ_OPS(jitbusy);
+BUILD_JIT_PROC_SEQ_OPS(jitsched);
+BUILD_JIT_PROC_SEQ_OPS(jitqueue);
+BUILD_JIT_PROC_SEQ_OPS(jitschedto);
+
+
 #define BUILD_JIT_PROC_OPEN(type) \
     static int type##_proc_open(struct inode *inode, struct file *file) \
     {   \
-        return single_open(file, type##_show, NULL);    \
+        return seq_open(file, &type##_proc_seq_ops);    \
+    }
+
+#define BUILD_JIT_PROC_SINGLE_OPEN(type) \
+    static int type##_proc_single_open(struct inode *inode, struct file *file)\
+    {   \
+        return single_open(file, &type##_show, NULL);   \
     }
 
 /*
  * Now to implement the /proc file we need only make an open
  * method which sets up the sequence operators.
  */
-BUILD_JIT_PROC_OPEN(currentime);
-BUILD_JIT_PROC_OPEN(jitbusy);
-BUILD_JIT_PROC_OPEN(jitsched);
-BUILD_JIT_PROC_OPEN(jitqueue);
-BUILD_JIT_PROC_OPEN(jitschedto);
-BUILD_JIT_PROC_OPEN(jitimer);
-BUILD_JIT_PROC_OPEN(jitasklet);
-BUILD_JIT_PROC_OPEN(jitasklethi);
+BUILD_JIT_PROC_OPEN(jitbusy)
+BUILD_JIT_PROC_OPEN(jitsched)
+BUILD_JIT_PROC_OPEN(jitqueue)
+BUILD_JIT_PROC_OPEN(jitschedto)
+
+BUILD_JIT_PROC_SINGLE_OPEN(currentime)
+BUILD_JIT_PROC_SINGLE_OPEN(jitimer)
+BUILD_JIT_PROC_SINGLE_OPEN(jitasklet)
+BUILD_JIT_PROC_SINGLE_OPEN(jitasklethi)
+
+static int jit_seq_release(struct inode *inode, struct file *file){
+    p_cnt = 0;
+    return seq_release(inode, file);
+}
+
 
 #define BUILD_JIT_PROC_OPS(type) \
     static struct file_operations type##_proc_ops = {\
@@ -339,6 +391,15 @@ BUILD_JIT_PROC_OPEN(jitasklethi);
         .open    = type##_proc_open,    \
         .read    = seq_read,            \
         .llseek  = seq_lseek,           \
+        .release = jit_seq_release,      \
+    };
+
+#define BUILD_JIT_PROC_SINGLE_OPS(type) \
+    static struct file_operations type##_proc_single_ops = {\
+        .owner   = THIS_MODULE,     \
+        .open    = type##_proc_single_open,     \
+        .read    = seq_read,        \
+        .llseek  = seq_lseek,       \
         .release = single_release,      \
     };
 
@@ -346,38 +407,40 @@ BUILD_JIT_PROC_OPEN(jitasklethi);
 /*
  * Create a set of file operations for our proc file.
  */
-BUILD_JIT_PROC_OPS(currentime);
-BUILD_JIT_PROC_OPS(jitbusy);
-BUILD_JIT_PROC_OPS(jitsched);
-BUILD_JIT_PROC_OPS(jitqueue);
-BUILD_JIT_PROC_OPS(jitschedto);
-BUILD_JIT_PROC_OPS(jitimer);
-BUILD_JIT_PROC_OPS(jitasklet);
-BUILD_JIT_PROC_OPS(jitasklethi);
+BUILD_JIT_PROC_OPS(jitbusy)
+BUILD_JIT_PROC_OPS(jitsched)
+BUILD_JIT_PROC_OPS(jitqueue)
+BUILD_JIT_PROC_OPS(jitschedto)
+
+BUILD_JIT_PROC_SINGLE_OPS(currentime)
+BUILD_JIT_PROC_SINGLE_OPS(jitimer)
+BUILD_JIT_PROC_SINGLE_OPS(jitasklet)
+BUILD_JIT_PROC_SINGLE_OPS(jitasklethi)
 
 
 int __init jit_init(void)
 {
-	proc_create("currentime", 0, NULL, &currentime_proc_ops);
 	proc_create("jitbusy", 0, NULL, &jitbusy_proc_ops);
 	proc_create("jitsched", 0, NULL, &jitsched_proc_ops);
 	proc_create("jitqueue", 0, NULL, &jitqueue_proc_ops);
 	proc_create("jitschedto", 0, NULL, &jitschedto_proc_ops);
-	proc_create("jitimer", 0, NULL, &jitimer_proc_ops);
-    proc_create("jitasklet", 0, NULL, &jitasklet_proc_ops);
-    proc_create("jitasklethi", 0, NULL, &jitasklethi_proc_ops);
+
+	proc_create("currentime", 0, NULL, &currentime_proc_single_ops);
+	proc_create("jitimer", 0, NULL, &jitimer_proc_single_ops);
+    proc_create("jitasklet", 0, NULL, &jitasklet_proc_single_ops);
+    proc_create("jitasklethi", 0, NULL, &jitasklethi_proc_single_ops);
 
 	return 0; /* success */
 }
 
 void __exit jit_cleanup(void)
 {
-	remove_proc_entry("currentime", NULL);
 	remove_proc_entry("jitbusy", NULL);
 	remove_proc_entry("jitsched", NULL);
 	remove_proc_entry("jitqueue", NULL);
 	remove_proc_entry("jitschedto", NULL);
 
+	remove_proc_entry("currentime", NULL);
 	remove_proc_entry("jitimer", NULL);
 	remove_proc_entry("jitasklet", NULL);
 	remove_proc_entry("jitasklethi", NULL);
