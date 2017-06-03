@@ -40,7 +40,7 @@
 
 int delay = HZ; /* the default delay, expressed in jiffies */
 int max_timer_nr = 4096;
-int p_cnt = 1;
+int p_cnt = 0;
 
 module_param(delay, int, 0);
 module_param(max_timer_nr, int, 0);
@@ -420,6 +420,7 @@ BUILD_JIT_PROC_SINGLE_OPS(jitasklethi)
 
 int __init jit_init(void)
 {
+    p_cnt = 0;
 	proc_create("jitbusy", 0, NULL, &jitbusy_proc_ops);
 	proc_create("jitsched", 0, NULL, &jitsched_proc_ops);
 	proc_create("jitqueue", 0, NULL, &jitqueue_proc_ops);
