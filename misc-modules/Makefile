@@ -28,7 +28,7 @@ else
 #    obj-m := hello.o hellop.o seq.o jit.o jiq.o sleepy.o complete.o \
 #             silly.o faulty.o kdatasize.o kdataalign.o
 	obj-m := hello.o hellop.o seq.o complete.o faulty.o sleepy.o jit.o jiq.o \
-			 silly.o kdataalign.o
+			 silly.o kdatasize.o kdataalign.o
 endif
 
 
