@@ -7,3 +7,4 @@ kernel//home/vagrant/sandbox/kernel/linux4Drivers/misc-modules/sleepy.ko
 kernel//home/vagrant/sandbox/kernel/linux4Drivers/misc-modules/jit.ko
 kernel//home/vagrant/sandbox/kernel/linux4Drivers/misc-modules/jiq.ko
 kernel//home/vagrant/sandbox/kernel/linux4Drivers/misc-modules/silly.ko
+kernel//home/vagrant/sandbox/kernel/linux4Drivers/misc-modules/kdataalign.ko
