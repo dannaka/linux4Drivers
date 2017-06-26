@@ -45,7 +45,7 @@ void sculld_vma_close(struct vm_area_struct *vma)
 }
 
 /*
- * The nopage method: the core of the file. It retrieves the
+ * The fault method: the core of the file. It retrieves the
  * page required from the sculld device and returns it to the
  * user. The count for the page must be incremented, because
  * it is automatically decremented at page unmap.
@@ -56,39 +56,38 @@ void sculld_vma_close(struct vm_area_struct *vma)
  * pages from a multipage block: when they are unmapped, their count
  * is individually decreased, and would drop to 0.
  */
-
-struct page *sculld_vma_nopage(struct vm_area_struct *vma,
-                                unsigned long address, int *type)
+static int sculld_vma_fault(struct vm_area_struct *vma,
+        struct vm_fault *vmf)
 {
-	unsigned long offset;
-	struct sculld_dev *ptr, *dev = vma->vm_private_data;
-	struct page *page = NOPAGE_SIGBUS;
-	void *pageptr = NULL; /* default to "missing" */
+    struct sculld_dev *ptr, *dev = vma->vm_private_data;
+    int result = VM_FAULT_SIGBUS;
+    struct page *page;
+    void * pageptr = NULL;
+    pgoff_t pgoff = vmf->pgoff;  
 
-	down(&dev->sem);
-	offset = (address - vma->vm_start) + (vma->vm_pgoff << PAGE_SHIFT);
-	if (offset >= dev->size) goto out; /* out of range */
+    down(&dev->sem);
+    printk (KERN_NOTICE "sculld_vma_fault: pgoff   = %lx\n", pgoff);
+    if (pgoff >= dev->size) goto out;
 
-	/*
-	 * Now retrieve the sculld device from the list,then the page.
-	 * If the device has holes, the process receives a SIGBUS when
-	 * accessing the hole.
-	 */
-	offset >>= PAGE_SHIFT; /* offset is a number of pages */
-	for (ptr = dev; ptr && offset >= dev->qset;) {
-		ptr = ptr->next;
-		offset -= dev->qset;
-	}
-	if (ptr && ptr->data) pageptr = ptr->data[offset];
-	if (!pageptr) goto out; /* hole or end-of-file */
-
-	/* got it, now increment the count */
-	get_page(page);
-	if (type)
-		*type = VM_FAULT_MINOR;
-  out:
-	up(&dev->sem);
-	return page;
+    /*
+     * Now retrieve the sculld device from the list, then the page.
+     * If the device has holes, the process receives a SIGBUS when
+     * accessing the hole.
+     */
+    for (ptr = dev; ptr && pgoff >= dev->qset;) {
+        ptr = ptr->next;
+        pgoff -= dev->qset;
+    }
+    if (ptr && ptr->data) pageptr = ptr->data[pgoff];
+    if (!pageptr) goto out; /* hole or end-of-file */
+    /* got it, now convert pointer to a struct page and increment the count */
+    page = virt_to_page(pageptr);
+    get_page(page);
+    vmf->page = page;
+    result = 0;
+out:
+    up(&dev->sem);
+    return result;
 }
 
 
@@ -96,7 +95,7 @@ struct page *sculld_vma_nopage(struct vm_area_struct *vma,
 struct vm_operations_struct sculld_vm_ops = {
 	.open =     sculld_vma_open,
 	.close =    sculld_vma_close,
-	.nopage =   sculld_vma_nopage,
+	.fault =   sculld_vma_fault,
 };
 
 
@@ -108,9 +107,9 @@ int sculld_mmap(struct file *filp, struct vm_area_struct *vma)
 	if (sculld_devices[iminor(inode)].order)
 		return -ENODEV;
 
-	/* don't do anything here: "nopage" will set up page table entries */
+	/* don't do anything here: "fault" will set up page table entries */
 	vma->vm_ops = &sculld_vm_ops;
-	vma->vm_flags |= VM_RESERVED;
+	vma->vm_flags |= VM_DONTEXPAND | VM_DONTDUMP;
 	vma->vm_private_data = filp->private_data;
 	sculld_vma_open(vma);
 	return 0;
