@@ -15,17 +15,19 @@
  * $Id: _main.c.in,v 1.21 2004/10/14 20:11:39 corbet Exp $
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/init.h>
 #include <linux/kernel.h>	/* printk() */
+#include <linux/sched/signal.h> /* signal_pending() */
 #include <linux/slab.h>		/* kmalloc() */
 #include <linux/fs.h>		/* everything... */
 #include <linux/errno.h>	/* error codes */
 #include <linux/types.h>	/* size_t */
 #include <linux/proc_fs.h>
 #include <linux/fcntl.h>	/* O_ACCMODE */
+#include <linux/io.h>
+#include <linux/uio.h>
 #include <linux/aio.h>
 #include <asm/uaccess.h>
 #include "scullc.h"		/* local definitions */
@@ -49,7 +51,7 @@ int scullc_trim(struct scullc_dev *dev);
 void scullc_cleanup(void);
 
 /* declare one cache pointer: use it for all devices */
-kmem_cache_t *scullc_cache;
+struct kmem_cache *scullc_cache;
 
 
 
@@ -272,8 +274,7 @@ ssize_t scullc_write (struct file *filp, const char __user *buf, size_t count,
  * The ioctl() implementation
  */
 
-int scullc_ioctl (struct inode *inode, struct file *filp,
-                 unsigned int cmd, unsigned long arg)
+long scullc_ioctl (struct file *filp, unsigned int cmd, unsigned long arg)
 {
 
 	int err = 0, ret = 0, tmp;
@@ -394,69 +395,151 @@ loff_t scullc_llseek (struct file *filp, loff_t off, int whence)
 }
 
 
-/*
- * A simple asynchronous I/O implementation.
- */
-
-struct async_work {
-	struct kiocb *iocb;
-	int result;
-	struct work_struct work;
-};
-
-/*
- * "Complete" an asynchronous operation.
- */
-static void scullc_do_deferred_op(void *p)
+static ssize_t do_scullc_iterative_read(struct scullc_dev *dev, struct kiocb *iocb, struct iov_iter *iter)
 {
-	struct async_work *stuff = (struct async_work *) p;
-	aio_complete(stuff->iocb, stuff->result, 0);
-	kfree(stuff);
+	ssize_t retval = 0;
+	struct scullc_dev *dptr;
+	int quantum = dev->quantum;
+	int qset = dev->qset;
+	int itemsize = quantum * qset; /* how many bytes in the listitem */
+	int item, s_pos, q_pos, rest;
+    size_t count = iov_iter_count(iter);
+    loff_t f_pos = iocb->ki_pos;
+
+    if (count > PAGE_SIZE)
+        count = PAGE_SIZE;
+
+	if (down_interruptible (&dev->sem))
+		return -ERESTARTSYS;
+	if (f_pos > dev->size) 
+		goto nothing;
+	if (f_pos + count > dev->size)
+		count = dev->size - f_pos;
+	/* find listitem, qset index, and offset in the quantum */
+	item = ((long) f_pos) / itemsize;
+	rest = ((long) f_pos) % itemsize;
+	s_pos = rest / quantum; q_pos = rest % quantum;
+
+    	/* follow the list up to the right position (defined elsewhere) */
+	dptr = scullc_follow(dev, item);
+
+	if (!dptr->data)
+		goto nothing; /* don't fill holes */
+	if (!dptr->data[s_pos])
+		goto nothing;
+	if (count > quantum - q_pos)
+		count = quantum - q_pos; /* read only up to the end of this quantum */
+
+    retval = copy_to_iter (dptr->data[s_pos]+q_pos, count, iter);
+	up (&dev->sem);
+	return retval;
+
+  nothing:
+	up (&dev->sem);
+	return retval;
+}
+
+static ssize_t scullc_read_iter(struct kiocb *iocb, struct iov_iter *iter)
+{
+    struct file *scullc_filp = iocb->ki_filp;
+    struct scullc_dev *dev = scullc_filp->private_data; /* the first listitem */
+	ssize_t read_cnt = 0;
+
+    while(iov_iter_count(iter)) {
+        ssize_t n = 0;
+
+        /* do iterative read */
+        n = do_scullc_iterative_read(dev, iocb, iter);
+        if (n < 0)
+            return n;
+
+        if (!n && iov_iter_count(iter))
+            return read_cnt ? read_cnt : -EFAULT;
+        read_cnt += n;
+        if (signal_pending(current))
+            return read_cnt ? read_cnt : -ERESTARTSYS;
+        cond_resched();
+    }
+    return read_cnt;
 }
 
 
-static int scullc_defer_op(int write, struct kiocb *iocb, char __user *buf,
-		size_t count, loff_t pos)
+static ssize_t do_scullc_iterative_write(struct scullc_dev *dev, struct kiocb *iocb, struct iov_iter *iter) 
 {
-	struct async_work *stuff;
-	int result;
+	ssize_t retval = -ENOMEM; /* our most likely error */
+	struct scullc_dev *dptr;
+	int quantum = dev->quantum;
+	int qset = dev->qset;
+	int itemsize = quantum * qset; /* how many bytes in the listitem */
+	int item, s_pos, q_pos, rest;
+    size_t count = iov_iter_count(iter);
+    loff_t f_pos = iocb->ki_pos;
 
-	/* Copy now while we can access the buffer */
-	if (write)
-		result = scullc_write(iocb->ki_filp, buf, count, &pos);
-	else
-		result = scullc_read(iocb->ki_filp, buf, count, &pos);
+    if (count > PAGE_SIZE)
+        count = PAGE_SIZE;
 
-	/* If this is a synchronous IOCB, we return our status now. */
-	if (is_sync_kiocb(iocb))
-		return result;
+	if (down_interruptible (&dev->sem))
+		return -ERESTARTSYS;
 
-	/* Otherwise defer the completion for a few milliseconds. */
-	stuff = kmalloc (sizeof (*stuff), GFP_KERNEL);
-	if (stuff == NULL)
-		return result; /* No memory, just complete now */
-	stuff->iocb = iocb;
-	stuff->result = result;
-	INIT_WORK(&stuff->work, scullc_do_deferred_op, stuff);
-	schedule_delayed_work(&stuff->work, HZ/100);
-	return -EIOCBQUEUED;
-}
+	/* find listitem, qset index and offset in the quantum */
+	item = ((long) f_pos) / itemsize;
+	rest = ((long) f_pos) % itemsize;
+	s_pos = rest / quantum; q_pos = rest % quantum;
 
-
-static ssize_t scullc_aio_read(struct kiocb *iocb, char __user *buf, size_t count,
-		loff_t pos)
-{
-	return scullc_defer_op(0, iocb, buf, count, pos);
-}
-
-static ssize_t scullc_aio_write(struct kiocb *iocb, const char __user *buf,
-		size_t count, loff_t pos)
-{
-	return scullc_defer_op(1, iocb, (char __user *) buf, count, pos);
-}
-
-
+	/* follow the list up to the right position */
+	dptr = scullc_follow(dev, item);
+	if (!dptr->data) {
+		dptr->data = kmalloc(qset * sizeof(void *), GFP_KERNEL);
+		if (!dptr->data)
+			goto nomem;
+		memset(dptr->data, 0, qset * sizeof(char *));
+	}
+	/* Allocate a quantum using the memory cache */
+	if (!dptr->data[s_pos]) {
+		dptr->data[s_pos] = kmem_cache_alloc(scullc_cache, GFP_KERNEL);
+		if (!dptr->data[s_pos])
+			goto nomem;
+		memset(dptr->data[s_pos], 0, scullc_quantum);
+	}
+	if (count > quantum - q_pos)
+		count = quantum - q_pos; /* write only up to the end of this quantum */
+	retval = copy_from_iter (dptr->data[s_pos]+q_pos, count, iter);
  
+    	/* update the size */
+	if (dev->size < f_pos)
+		dev->size = f_pos;
+	up (&dev->sem);
+	return retval;
+
+  nomem:
+	up (&dev->sem);
+	return retval;
+
+}
+
+static ssize_t scullc_write_iter (struct kiocb *iocb, struct iov_iter *from) {
+    struct file *scullc_filp = iocb->ki_filp;
+    struct scullc_dev *dev = scullc_filp->private_data;
+    ssize_t written_cnt = 0;
+
+    while(iov_iter_count(from)) {
+        ssize_t n = 0;
+
+        /* do iterative read */
+        n = do_scullc_iterative_write(dev, iocb, from);
+        if (n < 0)
+            return n;
+
+        if (!n && iov_iter_count(from))
+            return written_cnt ? written_cnt : -EFAULT;
+        written_cnt += n;
+        if (signal_pending(current))
+            return written_cnt ? written_cnt : -ERESTARTSYS;
+        cond_resched();
+    }
+    return written_cnt;
+
+}
 
 /*
  * The fops
@@ -467,11 +550,11 @@ struct file_operations scullc_fops = {
 	.llseek =    scullc_llseek,
 	.read =	     scullc_read,
 	.write =     scullc_write,
-	.ioctl =     scullc_ioctl,
+    .read_iter = scullc_read_iter,
+    .write_iter = scullc_write_iter,
+	.unlocked_ioctl =     scullc_ioctl,
 	.open =	     scullc_open,
 	.release =   scullc_release,
-	.aio_read =  scullc_aio_read,
-	.aio_write = scullc_aio_write,
 };
 
 int scullc_trim(struct scullc_dev *dev)
@@ -558,15 +641,15 @@ int scullc_init(void)
 	}
 
 	scullc_cache = kmem_cache_create("scullc", scullc_quantum,
-			0, SLAB_HWCACHE_ALIGN, NULL, NULL); /* no ctor/dtor */
+			0, SLAB_HWCACHE_ALIGN, NULL); /* no ctor */
 	if (!scullc_cache) {
 		scullc_cleanup();
 		return -ENOMEM;
 	}
 
-#ifdef SCULLC_USE_PROC /* only when available */
+//#ifdef SCULLC_USE_PROC /* only when available */
 	create_proc_read_entry("scullcmem", 0, NULL, scullc_read_procmem, NULL);
-#endif
+//#endif
 	return 0; /* succeed */
 
   fail_malloc:
@@ -580,9 +663,9 @@ void scullc_cleanup(void)
 {
 	int i;
 
-#ifdef SCULLC_USE_PROC
+//#ifdef SCULLC_USE_PROC
 	remove_proc_entry("scullcmem", NULL);
-#endif
+//#endif
 
 	for (i = 0; i < scullc_devs; i++) {
 		cdev_del(&scullc_devices[i].cdev);
