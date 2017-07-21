@@ -4,12 +4,12 @@
 
 
 ifeq ($(DEBUG),y)
-  DEBFLAGS = -O -g -DSCULLC_DEBUG # "-O" is needed to expand inlines
+  DEBFLAGS = -O -g -DSCULLC_DEBUG -DSCULLC_USE_PROC# "-O" is needed to expand inlines
 else
   DEBFLAGS = -O2
 endif
 
-CFLAGS += $(DEBFLAGS) -I$(LDDINC)
+ccflags-y += $(DEBFLAGS) -I$(LDDINC)
 
 TARGET = scullc
 
