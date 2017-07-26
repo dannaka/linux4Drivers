@@ -98,9 +98,9 @@ static int Simple_remap_mmap(struct file *filp, struct vm_area_struct *vma)
 /*
  * The fault version.
  */
-static int Simple_vma_fault(struct vm_area_struct *vma,
-        struct vm_fault *vmf)
+static int Simple_vma_fault(struct vm_fault *vmf)
 {
+    struct vm_area_struct *vma = vmf->vma;
     struct page *pageptr;
     unsigned long offset = vma->vm_pgoff << PAGE_SHIFT;
     unsigned long address = (unsigned long) vmf->address;
