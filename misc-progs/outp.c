@@ -44,23 +44,23 @@ static int write_one(unsigned int port, unsigned int val, int size)
     static int iopldone = 0;
 
     if (port > 1024) {
-	if (!iopldone && iopl(3)) {
-	    fprintf(stderr, "%s: iopl(): %s\n", prgname, strerror(errno));
-	    return 1;
-	}
-	iopldone++;
+        if (!iopldone && iopl(3)) {
+            fprintf(stderr, "%s: iopl(): %s\n", prgname, strerror(errno));
+            return 1;
+        }
+        iopldone++;
     } else if (ioperm(port,size,1)) {
-	fprintf(stderr, "%s: ioperm(%x): %s\n", prgname,
-		port, strerror(errno));
-	return 1;
+        fprintf(stderr, "%s: ioperm(%x): %s\n", prgname,
+            port, strerror(errno));
+        return 1;
     }
 
     if (size == 4)
-	outl(val, port);
+        outl(val, port);
     else if (size == 2)
-	outw(val&0xffff, port);
+        outw(val&0xffff, port);
     else
-	outb(val&0xff, port);
+        outb(val&0xff, port);
     return 0;
 }
 #else /* not i386 */
@@ -71,21 +71,21 @@ static int write_one(unsigned int port, unsigned int val, int size)
     unsigned char b; unsigned short w;
 
     if (fd < 0)
-	fd = open(PORT_FILE, O_WRONLY);
+        fd = open(PORT_FILE, O_WRONLY);
     if (fd < 0) {
-	fprintf(stderr, "%s: %s: %s\n", prgname, PORT_FILE, strerror(errno));
-	return 1;
+        fprintf(stderr, "%s: %s: %s\n", prgname, PORT_FILE, strerror(errno));
+        return 1;
     }
     lseek(fd, port, SEEK_SET);
     
     if (size == 4) {
-	write(fd, &val, 4);
+        write(fd, &val, 4);
     } else if (size == 2) {
-	w = val;
-	write(fd, &w, 2);
+        w = val;
+        write(fd, &w, 2);
     } else {
-	b = val;
-	write(fd, &b, 1);
+        b = val;
+        write(fd, &b, 1);
     }
     return 0;
 }
@@ -108,27 +108,27 @@ int main(int argc, char **argv)
     for (i=1;i<argc-1;i++) {
         if ( sscanf(argv[i], "%x%n", &port, &n) < 1
 	      || n != strlen(argv[i]) ) {
-	    fprintf(stderr, "%s: argument \"%s\" is not a hex number\n",
-		    argv[0], argv[i]);
-	    error++; continue;
-	}
-	if (port & (size-1)) {
-	    fprintf(stderr, "%s: argument \"%s\" is not properly aligned\n",
-		    argv[0], argv[i]);
-	    error++; continue;
-	}
+            fprintf(stderr, "%s: argument \"%s\" is not a hex number\n",
+                argv[0], argv[i]);
+            error++; continue;
+        }
+        if (port & (size-1)) {
+            fprintf(stderr, "%s: argument \"%s\" is not properly aligned\n",
+                argv[0], argv[i]);
+            error++; continue;
+        }
         if ( sscanf(argv[i+1], "%x%n", &val, &n) < 1
 	      || n != strlen(argv[i+1]) ) {
-	    fprintf(stderr, "%s: argument \"%s\" is not a hex number\n",
-		    argv[0], argv[i+1]);
-	    error++; continue;
-	}
-	if (size < 4 && val > (size == 1 ? 0xff : 0xffff)) {
-	    fprintf(stderr, "%s: argument \"%s\" out of range\n",
-		    argv[0], argv[i+1]);
-	    error++; continue;
-	}
-	error += write_one(port, val, size);
+            fprintf(stderr, "%s: argument \"%s\" is not a hex number\n",
+                argv[0], argv[i+1]);
+            error++; continue;
+        }
+        if (size < 4 && val > (size == 1 ? 0xff : 0xffff)) {
+            fprintf(stderr, "%s: argument \"%s\" out of range\n",
+                argv[0], argv[i+1]);
+            error++; continue;
+        }
+        error += write_one(port, val, size);
     }
     exit (error ? 1 : 0);
 }

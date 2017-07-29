@@ -58,7 +58,7 @@
  * kernel timer
  */
 
-typedef struct Sbull_Dev {
+typedef struct sbull_dev {
    int size;
    int usage;
    struct timer_list timer;
@@ -68,4 +68,4 @@ typedef struct Sbull_Dev {
    request_queue_t *queue;
    int busy;
 #endif
-}              Sbull_Dev;
+}              sbull_dev;
